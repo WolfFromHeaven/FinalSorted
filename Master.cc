@@ -24,8 +24,7 @@ void Master::run()
   // GENERATE LIST OF PARTITIONS.
   PartitionSampling partitioner;
   partitioner.setConfiguration( &conf );
-	//PartitionList rangeList;
-	PartitionList maxList, minList;	
+  PartitionList rangeList;
 	PartitionList partitionList;
 	
   // BROADCAST CONFIGURATION TO WORKERS
@@ -50,68 +49,64 @@ void Master::run()
 
 
 	// RECIEVING TOPK DATASET RANGE
- /* for ( unsigned int i = 1; i <= conf.getNumReducer(); i++ ) {
-		for(int j = 0; j < 2; j++){
-			unsigned char* buff = new unsigned char[ conf.getKeySize()];
-			MPI::COMM_WORLD.Recv( buff, conf.getKeySize(), MPI::UNSIGNED_CHAR, i, 0);
-			rangeList.push_back( buff );
-		}
-  }	
-
-	sort( rangeList.begin(), rangeList.end(), Sorter(conf.getKeySize()) ) ;
-	unsigned char* minKey = rangeList.front();
-	unsigned char* maxKey = rangeList.back();*/
-
-  for ( unsigned int i = 1; i <= conf.getNumReducer(); i++ ) {
-		for(int j = 0; j < 2; j++){//receive min and max value for each node
-			unsigned char* buff = new unsigned char[ conf.getKeySize()];
-			MPI::COMM_WORLD.Recv( buff, conf.getKeySize(), MPI::UNSIGNED_CHAR, i, 0);
-			if(j == 1) maxList.push_back( buff );
-			else minList.push_back( buff );
-		}
-  }	
-
-	sort( maxList.begin(), maxList.end(), Sorter(conf.getKeySize()) ) ;
-	sort( minList.begin(), minList.end(), Sorter(conf.getKeySize()) ) ;
-	unsigned char* minKey = minList.front();
-	unsigned char* maxKey = maxList.front();
+	for ( unsigned int i = 1; i <= conf.getNumReducer(); i++ ) {
+                for(int j = 0; j < 2; j++){//receive min and max value for each node
+                        unsigned char* buff = new unsigned char[ conf.getKeySize()];
+                        MPI::COMM_WORLD.Recv( buff, conf.getKeySize(), MPI::UNSIGNED_CHAR, i, 0);
+                        rangeList.push_back( buff );
+                }
+  }
+        //cout<<rangeList.size()<<"\n";
+        sort( rangeList.begin(), rangeList.end(), Sorter(conf.getKeySize()) ) ;
+        unsigned char* minKey = rangeList.front();
+        unsigned char* maxKey = rangeList.back();
 
 	unsigned long long dig1 = 0; unsigned long long dig2 = 0;
 	//converting the stings to integer values
-	for(unsigned int i = 0; i < conf.getKeySize(); i++){
-			unsigned long long temp = pow(10,conf.getKeySize()-i-1);
-			dig1 += (minKey[i]-48)*temp;
-			dig2 += (maxKey[i]-48)*temp;
-	}
+ for(unsigned int i = 0; i < conf.getKeySize(); i++){
+                        unsigned long long temp = pow(95,conf.getKeySize()-i-1);
+                        //cout<<minKey[i]<<" "<<maxKey[i]<<"\n";
+                        dig1 += (minKey[i]-32)*temp;
+                        dig2 += (maxKey[i]-32)*temp;
+                        //cout<<dig1<<" "<<dig2<<"\n";
+        }
+        //cout<<dig1<<" "<<dig2;
 
-	unsigned long long part[conf.getNumReducer()-1];
-	unsigned long long range = dig2 - dig1;
-	unsigned long long partitionSize = round(range/conf.getNumReducer());
-	for( unsigned int i = 1; i < conf.getNumReducer(); i++){
-			part[i-1] = (i*partitionSize) + dig1;
-	}
+        //FINDING THE PARTITIONS
+        unsigned long long part[conf.getNumReducer()-1];
+        unsigned long long range = dig2 - dig1;
+        unsigned long long partitionSize = round(range/conf.getNumReducer());
+        for( unsigned int i = 1; i < conf.getNumReducer(); i++){
+                        part[i-1] = (i*partitionSize) + dig1;
+        }
+        //cout<<part[0]<<" "<<part[1];
+        unsigned char tempArr1[conf.getKeySize()];
+        for( unsigned int i = 0; i < conf.getNumReducer()-1; i++){
+                //cout<<"111\n";
+                unsigned long long num = part[i];
+                unsigned char* keyBuff = new unsigned char[ conf.getKeySize()];
+                for(unsigned int j = 0; j < conf.getKeySize(); j++){
+                                unsigned long long temp = pow(95,conf.getKeySize()-j-1);
+                                unsigned long long quotient = num / temp;
+                                unsigned long long rem = num % temp;
+                                num = rem;
+                                tempArr1[j] = (unsigned char) (quotient + 32);
+                }
 
-	unsigned char tempArr[conf.getKeySize()];
-	for( unsigned int i = 0; i < conf.getNumReducer()-1; i++){
-		unsigned long long num = part[i];
-		unsigned char* keyBuff = new unsigned char[ conf.getKeySize()];
-		for(unsigned int j = 0; j < conf.getKeySize(); j++){
-				unsigned long long temp = pow(10,conf.getKeySize()-j-1);
-				unsigned long long quotient = num / temp;
-				unsigned long long rem = num % temp;
-				num = rem;
-				tempArr[j] = (unsigned char) (quotient + 48);
-		}
-		memcpy(keyBuff, tempArr,conf.getKeySize());
-		partitionList.push_back(keyBuff);
-	}
+                memcpy(keyBuff, tempArr1, conf.getKeySize());
+                partitionList.push_back(keyBuff);
+        }
 
   // BROADCAST PARTITIONS TO WORKERS
   for ( auto it = partitionList.begin(); it != partitionList.end(); it++ ) {
     unsigned char* partition = *it;
     MPI::COMM_WORLD.Bcast( partition, conf.getKeySize(), MPI::UNSIGNED_CHAR, 0 );
   }
-	MPI::COMM_WORLD.Bcast( maxKey, conf.getKeySize(), MPI::UNSIGNED_CHAR, 0 );
+
+  //SEND MAX KEY TO WORKERS
+  for(unsigned int i = 1; i <= conf.getNumReducer(); i++){
+    MPI::COMM_WORLD.Send(maxKey, conf.getKeySize(), MPI::UNSIGNED_CHAR, i, 0);
+  }  
 
   // COMPUTE MAP TIME
   MPI::COMM_WORLD.Gather( &rTime, 1, MPI::DOUBLE, rcvTime, 1, MPI::DOUBLE, 0 );
@@ -175,7 +170,7 @@ void Master::run()
   cout << rank << ": REDUCE  | Avg = " << setw(10) << avgTime/numWorker
        << "   Max = " << setw(10) << maxTime << endl;      
 	totTime += avgTime/numWorker;
-	cout<< rank << ": TOTAL = " << totTime<< endl;
+//	cout<< rank << ": TOTAL = " << totTime<< endl;
 
   // CLEAN UP MEMORY
   for ( auto it = partitionList.begin(); it != partitionList.end(); it++ ) {
