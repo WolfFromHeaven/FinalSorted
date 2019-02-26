@@ -78,8 +78,9 @@ void Worker::run()
 	MPI::COMM_WORLD.Send( &( txData.numLine ), 1, MPI::UNSIGNED_LONG_LONG, j, 0 );
 	MPI::COMM_WORLD.Send( txData.data, txData.numLine * lineSize, MPI::UNSIGNED_CHAR, j, 0 );
 	txTime += clock();
+	cout<<"From "<<rank<<" to "<<j<<" : "<<txData.numLine<<endl;
 	tolSize += txData.numLine * lineSize + sizeof(unsigned long long);
-	//cout<<rank<<" : "<<txData.numLine<<"\n";
+	
 	delete [] txData.data;
       }
       MPI::COMM_WORLD.Barrier();
@@ -216,13 +217,8 @@ void Worker::execMap()
 	minMax.push_back(top_K.back());
 	
 	for(auto it = minMax.begin(); it != minMax.end(); ++it){
-			unsigned char* partition = *it;
-			unsigned char* buff = new unsigned char[ conf->getKeySize()];
-			memcpy( buff, partition, conf->getKeySize() );
-			//cout<<buff<<"\n";
-			//MPI::COMM_WORLD.Gather( partition, conf->getKeySize(), MPI::UNSIGNED_CHAR, NULL, 0, MPI::UNSIGNED_CHAR, 0 );
+			unsigned char* partition = *it;	
 			MPI::COMM_WORLD.Send( partition, conf->getKeySize(), MPI::UNSIGNED_CHAR, 0, 0 );
-
 	}
    
 	
@@ -233,9 +229,13 @@ void Worker::execMap()
     partitionList.push_back( buff );//cout<<buff<<"\n";
   }
 
-	unsigned char* maximumKeyTopK = new unsigned char[ conf->getKeySize() + 1 ];
-	MPI::COMM_WORLD.Bcast( maximumKeyTopK, conf->getKeySize() , MPI::UNSIGNED_CHAR, 0 );
-//	cout<<rank<<" : MaxValue is "<<maximumKeyTopK<<"\n";
+  //RECEIVE MAX KEY VALUE
+  unsigned char* maxKey = new unsigned char[ conf->getKeySize() + 1 ];
+  //cout<<maxKey<<"\n";
+  MPI::COMM_WORLD.Recv(maxKey, conf->getKeySize(), MPI::UNSIGNED_CHAR, 0, 0);
+  //cout<<rank<<" : "<<maxKey<<"\n";
+
+
 
   // Build trie
   unsigned char prefix[ conf->getKeySize() ];
@@ -248,15 +248,13 @@ void Worker::execMap()
 
 	for( unsigned long i = 0; i < K; i++ ) {
 		unsigned int wid = trie->findPartition( top_K[i] );
-		if( wid == conf->getNumReducer()-1 ) {
-			unsigned char* buff = new unsigned char[ conf->getKeySize() + 1 ];
-			memcpy( buff, top_K[i], conf->getKeySize() );
-			if( !cmpKeyInverse1 ( buff, maximumKeyTopK, conf->getKeySize()) ){
-					partitionCollection.at( wid )->push_back( top_K[i] );
-			}
+		if( wid != conf->getNumReducer()-1 ) {
+			partitionCollection.at(wid)->push_back( top_K[i]);	
 		}     
 		else {
-			partitionCollection.at( wid )->push_back( top_K[i] );
+			if( cmpKey(top_K[i], maxKey, conf->getKeySize()) ){
+				partitionCollection.at( wid )->push_back( top_K[i] );
+			}
 		}
   }
 
@@ -267,7 +265,7 @@ void Worker::execMap()
     unsigned int wid = trie->findPartition( top_K[i] );
 		partitionCollection.at( wid )->push_back( top_K[i] );
 	}*/
-
+// cout<<rank<<" : "<<partitionCollection.at(0)->size()<<" "<<partitionCollection.at(1)->size()<<" "<<partitionCollection.at(2)->size()<<" "<<partitionCollection.at(3)->size()<<endl;
   time += clock();
   rTime = double( time ) / CLOCKS_PER_SEC;  
   MPI::COMM_WORLD.Gather( &rTime, 1, MPI::DOUBLE, NULL, 1, MPI::DOUBLE, 0 );    
@@ -282,7 +280,7 @@ void Worker::execMap()
     unsigned long long numLine = partitionCollection[ i ]->size();
     partitionTxData[ i ].data = new unsigned char[ numLine * lineSize ];
     partitionTxData[ i ].numLine = numLine;
-		//cout<<numLine<<" ";
+//		cout<<rank<<" : "<<i<<" = "<<numLine<<"\n";
     auto lit = partitionCollection[ i ]->begin();
     for( unsigned long long j = 0; j < numLine * lineSize; j += lineSize ) {
       memcpy( partitionTxData[ i ].data + j, *lit, lineSize );
